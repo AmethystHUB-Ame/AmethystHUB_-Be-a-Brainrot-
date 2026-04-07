@@ -284,48 +284,41 @@ local function notifyToggle(name, state)
     notify(name .. (state and " ON" or " OFF"), state and "Enabled" or "Disabled", 3)
 end
 
---[[ FEATURE: FARM BRAINROT (single loop) ]]----------------------------------
+--[[ FEATURE: FARM BRAINROT (FIXED) ]]--------------------------------------
 local farmActive = false
 local farmTask = nil
 
-local function getSelectedFilters(optValue)
-    local t = {}
-    for v, state in pairs(optValue) do if state then table.insert(t, v) end end
-    return t
-end
-
-local function slotRefIsAllowed(model)
-    local slotRef = model:GetAttribute("SlotRef")
-    if not slotRef then return true end
-    local slotNum = tonumber(slotRef:match("Slot(%d+)$"))
-    if not slotNum then return true end
-    local hasVIP = false
-    pcall(function()
-        local MarketplaceService = game:GetService("MarketplaceService")
-        hasVIP = MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 1760093100)
-    end)
-    return slotNum < 9 or hasVIP
-end
-
-local function modelMatchesFilters(model)
-    if not slotRefIsAllowed(model) then return false end
-    local selRarities = getSelectedFilters(Amethyst.S.FarmRarityFilters)
-    local selMutations = getSelectedFilters(Amethyst.S.FarmMutationFilters)
-    if #selRarities == 0 and #selMutations == 0 then return true end
-    local rarity = model:GetAttribute("Rarity")
-    local mutation = model:GetAttribute("Mutation")
-    for _, r in ipairs(selRarities) do if rarity == r then return true end end
-    for _, m in ipairs(selMutations) do
-        if m == "Normal" then if mutation == nil then return true end
-        elseif mutation == m then return true end
+local function findBrainrotModels()
+    local locations = {
+        workspace.Brainrots,
+        workspace:FindFirstChild("Brainrots"),
+        workspace:FindFirstChild("BrainrotFolder"),
+    }
+    for _, loc in ipairs(locations) do
+        if loc and (loc:IsA("Folder") or loc:IsA("Model")) then
+            return loc:GetChildren()
+        end
     end
-    return false
+    local results = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:GetAttribute("Rarity") then
+            table.insert(results, obj)
+        end
+    end
+    return results
 end
 
-local function findCarryPrompt(model)
+local function findCarryPromptAdvanced(model)
+    local promptNames = {"Carry", "Steal", "Take", "Collect", "Grab"}
+    local actionTexts = {"Steal", "Carry", "Take", "Collect"}
     for _, desc in ipairs(model:GetDescendants()) do
-        if desc:IsA("ProximityPrompt") and desc.Name == "Carry" and desc.Parent:IsA("BasePart") and desc.ActionText == "Steal" then
-            return desc
+        if desc:IsA("ProximityPrompt") then
+            for _, pName in ipairs(promptNames) do
+                if desc.Name == pName then return desc end
+            end
+            for _, actText in ipairs(actionTexts) do
+                if desc.ActionText == actText then return desc end
+            end
         end
     end
     return nil
@@ -335,30 +328,54 @@ local function farmLoop()
     while Amethyst._alive and farmActive do
         safeCall(function()
             local char = LocalPlayer.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if not root then task.wait(1) return end
+            if not char or not char.Parent then task.wait(1) return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then task.wait(0.5) return end
 
-            root.CFrame = CFrame.new(708, 39, -2123)
+            -- Central farm point
+            local farmPoint = CFrame.new(708, 39, -2123)
+            root.CFrame = farmPoint
             task.wait(jitter(0.5, 0.3))
 
+            local allModels = findBrainrotModels()
             local valid = {}
-            for _, model in ipairs(workspace.Brainrots:GetChildren()) do
+            for _, model in ipairs(allModels) do
                 if model:IsA("Model") and modelMatchesFilters(model) then
-                    table.insert(valid, model)
+                    if findCarryPromptAdvanced(model) then
+                        table.insert(valid, model)
+                    end
                 end
             end
-            if #valid == 0 then task.wait(jitter(0.9, 0.2)) return end
+
+            if #valid == 0 then
+                debugLog("No valid brainrots")
+                task.wait(jitter(2, 0.3))
+                root.CFrame = farmPoint * CFrame.new(0, 0, 5)
+                task.wait(0.5)
+                root.CFrame = farmPoint
+                task.wait(0.5)
+                return
+            end
 
             local target = valid[math.random(1, #valid)]
-            if not target or not target.Parent then task.wait(0.2) return end
+            if not target or not target.Parent then task.wait(0.5) return end
 
-            root.CFrame = target:GetPivot() * CFrame.new(0, 3, 0)
+            local targetPos = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChild("Head") or target:GetPivot()
+            if not targetPos then task.wait(0.5) return end
+
+            pcall(function()
+                root.CFrame = CFrame.new(targetPos.Position) * CFrame.new(0, 3, 0)
+            end)
             task.wait(jitter(0.3, 0.2))
 
-            local prompt = findCarryPrompt(target)
+            local prompt = findCarryPromptAdvanced(target)
             if prompt then
-                task.wait(jitter(0.2, 0.5)) -- human delay
+                task.wait(jitter(0.2, 0.4))
                 fireproximityprompt(prompt)
+                debugLog("Fired prompt on: " .. target.Name)
+            else
+                local clickDetector = target:FindFirstChildOfClass("ClickDetector")
+                if clickDetector then clickDetector:Click() end
             end
             task.wait(jitter(0.3, 0.2))
 
@@ -378,7 +395,6 @@ end
 local function stopFarm()
     farmActive = false
 end
-
 --[[ FEATURE: AUTO COLLECT ]]-------------------------------------------------
 local collectActive = false
 local collectTask = nil
